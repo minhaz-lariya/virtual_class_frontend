@@ -116,15 +116,29 @@ function MeetingRoom() {
   /* ---------------- PEER CONNECTION ---------------- */
   const initializePeer = (conn) => {
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+
+        // ✅ FREE TURN (TESTING)
+        {
+          urls: "turn:global.relay.metered.ca:80",
+          username: "openai",
+          credential: "openai"
+        },
+        {
+          urls: "turn:global.relay.metered.ca:443",
+          username: "openai",
+          credential: "openai"
+        }
+      ]
     });
 
     peerConnection.current = pc;
 
+    // 🔥 MUST BE BEFORE SIGNALING
     pc.ontrack = (event) => {
-      if (remoteVideo.current) {
-        remoteVideo.current.srcObject = event.streams[0];
-      }
+      console.log("🎥 Remote track received");
+      remoteVideo.current.srcObject = event.streams[0];
     };
 
     pc.onicecandidate = (event) => {
@@ -133,6 +147,11 @@ function MeetingRoom() {
           candidate: event.candidate
         });
       }
+    };
+
+    // 🔍 Debug (optional but recommended)
+    pc.oniceconnectionstatechange = () => {
+      console.log("ICE STATE:", pc.iceConnectionState);
     };
   };
 
