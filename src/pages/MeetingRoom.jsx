@@ -38,6 +38,7 @@ function MeetingRoom() {
       .build();
 
     conn.start().then(async () => {
+      console.log("Connected to SignalR");
       await conn.invoke("JoinRoom", roomId, userId, role);
       initializePeer(conn);
       if (role === "teacher") startTeacherMedia();
@@ -48,8 +49,9 @@ function MeetingRoom() {
     );
 
     conn.on("JoinRequestReceived", id => {
-      if (role === "teacher")
+      if (role === "teacher") {
         setPendingUsers(p => [...new Set([...p, id])]);
+      }
     });
 
     conn.on("UserAccepted", async id => {
@@ -63,21 +65,47 @@ function MeetingRoom() {
 
     conn.on("ReceiveSignal", async (_, signal) => {
       const pc = peerConnection.current;
+
       if (signal.type === "offer" && role === "student") {
         await pc.setRemoteDescription(signal);
         const ans = await pc.createAnswer();
         await pc.setLocalDescription(ans);
         conn.invoke("SendSignal", roomId, userId, ans);
       }
-      if (signal.type === "answer" && role === "teacher")
+
+      if (signal.type === "answer" && role === "teacher") {
         await pc.setRemoteDescription(signal);
-      if (signal.candidate)
+      }
+
+      if (signal.candidate) {
         await pc.addIceCandidate(signal.candidate);
+      }
     });
 
     setConnection(conn);
     return () => conn.stop();
   }, []);
+
+  /* ---------------- STUDENT SEND JOIN REQUEST ---------------- */
+
+  const sendJoinRequest = async () => {
+    if (!connection || role !== "student" || isAccepted) return;
+
+    try {
+      await connection.invoke("RequestToJoin", roomId, userId);
+      console.log("Join request sent");
+    } catch (err) {
+      console.error("Join request failed", err);
+    }
+  };
+
+  useEffect(() => {
+    if (role === "student" && connection && !isAccepted) {
+      sendJoinRequest();
+      const interval = setInterval(sendJoinRequest, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [connection, isAccepted]);
 
   /* ---------------- WEBRTC ---------------- */
 
@@ -95,8 +123,9 @@ function MeetingRoom() {
     };
 
     pc.onicecandidate = e => {
-      if (e.candidate)
+      if (e.candidate) {
         conn.invoke("SendSignal", roomId, userId, { candidate: e.candidate });
+      }
     };
 
     peerConnection.current = pc;
@@ -112,24 +141,21 @@ function MeetingRoom() {
 
     localVideo.current.srcObject = localStream.current;
 
-    localStream.current.getTracks().forEach(t =>
-      peerConnection.current.addTrack(t, localStream.current)
+    localStream.current.getTracks().forEach(track =>
+      peerConnection.current.addTrack(track, localStream.current)
     );
   };
 
-  /* 🔊 MUTE */
   const toggleMic = () => {
     localStream.current.getAudioTracks()[0].enabled = !micOn;
     setMicOn(!micOn);
   };
 
-  /* 🎥 CAMERA */
   const toggleCamera = () => {
     localStream.current.getVideoTracks()[0].enabled = !camOn;
     setCamOn(!camOn);
   };
 
-  /* 📺 SCREEN SHARE */
   const startScreenShare = async () => {
     screenStream.current = await navigator.mediaDevices.getDisplayMedia({
       video: true
@@ -146,7 +172,6 @@ function MeetingRoom() {
     };
   };
 
-  /* 🎬 RECORDING */
   const toggleRecording = () => {
     if (!recording) {
       mediaRecorder.current = new MediaRecorder(localStream.current);
@@ -162,8 +187,18 @@ function MeetingRoom() {
         a.click();
       };
       mediaRecorder.current.start();
-    } else mediaRecorder.current.stop();
+    } else {
+      mediaRecorder.current.stop();
+    }
     setRecording(!recording);
+  };
+
+  /* ---------------- SHARE MEETING LINK (RESTORED) ---------------- */
+
+  const shareLink = () => {
+    const link = `${window.location.origin}/meeting/${roomId}?role=student`;
+    navigator.clipboard.writeText(link);
+    alert("Meeting link copied!");
   };
 
   /* ---------------- UI ---------------- */
@@ -174,8 +209,13 @@ function MeetingRoom() {
 
       {role === "teacher" && (
         <>
+          <button onClick={shareLink}>Copy Meeting Link</button>
+
           {pendingUsers.map(id => (
-            <button key={id} onClick={() => connection.invoke("AcceptUser", roomId, id)}>
+            <button
+              key={id}
+              onClick={() => connection.invoke("AcceptUser", roomId, id)}
+            >
               Accept {id}
             </button>
           ))}
@@ -189,6 +229,10 @@ function MeetingRoom() {
             </button>
           </div>
         </>
+      )}
+
+      {role === "student" && !isAccepted && (
+        <h3>Waiting for teacher approval...</h3>
       )}
 
       <video ref={localVideo} autoPlay muted width="300" />
