@@ -22,6 +22,7 @@ function MeetingRoom() {
 
   const [isAccepted, setIsAccepted] = useState(role === "teacher");
   const [pendingUsers, setPendingUsers] = useState([]);
+  const [participants, setParticipants] = useState([]);
 
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
@@ -33,7 +34,7 @@ function MeetingRoom() {
 
   useEffect(() => {
     const conn = new signalR.HubConnectionBuilder()
-      .withUrl("http://13.60.207.233:5000/meetingHub")
+      .withUrl("http://13.60.249.222:5000/meetingHub")
       .withAutomaticReconnect()
       .build();
 
@@ -55,12 +56,28 @@ function MeetingRoom() {
     });
 
     conn.on("UserAccepted", async id => {
-      if (id === userId) setIsAccepted(true);
+      setPendingUsers(p => p.filter(x => x !== id));
+      setParticipants(p => [...new Set([...p, id])]);
+
+      if (id === userId) {
+        setIsAccepted(true);
+
+        // ✅ FIX: start student camera AFTER accept
+        if (role === "student") {
+          await startStudentMedia();
+        }
+      }
+
       if (role === "teacher") {
         const offer = await peerConnection.current.createOffer();
         await peerConnection.current.setLocalDescription(offer);
         conn.invoke("SendSignal", roomId, userId, offer);
       }
+    });
+
+    conn.on("UserRejected", id => {
+      setPendingUsers(p => p.filter(x => x !== id));
+      if (id === userId) alert("Request rejected by teacher");
     });
 
     conn.on("ReceiveSignal", async (_, signal) => {
@@ -90,13 +107,7 @@ function MeetingRoom() {
 
   const sendJoinRequest = async () => {
     if (!connection || role !== "student" || isAccepted) return;
-
-    try {
-      await connection.invoke("RequestToJoin", roomId, userId);
-      console.log("Join request sent");
-    } catch (err) {
-      console.error("Join request failed", err);
-    }
+    await connection.invoke("RequestToJoin", roomId, userId);
   };
 
   useEffect(() => {
@@ -146,6 +157,19 @@ function MeetingRoom() {
     );
   };
 
+  const startStudentMedia = async () => {
+    localStream.current = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: true
+    });
+
+    localVideo.current.srcObject = localStream.current;
+
+    localStream.current.getTracks().forEach(track =>
+      peerConnection.current.addTrack(track, localStream.current)
+    );
+  };
+
   const toggleMic = () => {
     localStream.current.getAudioTracks()[0].enabled = !micOn;
     setMicOn(!micOn);
@@ -180,9 +204,8 @@ function MeetingRoom() {
         recordedChunks.current.push(e.data);
       mediaRecorder.current.onstop = () => {
         const blob = new Blob(recordedChunks.current, { type: "video/webm" });
-        const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = url;
+        a.href = URL.createObjectURL(blob);
         a.download = "recording.webm";
         a.click();
       };
@@ -193,10 +216,10 @@ function MeetingRoom() {
     setRecording(!recording);
   };
 
-  /* ---------------- SHARE MEETING LINK (RESTORED) ---------------- */
+  /* ---------------- SHARE LINK ---------------- */
 
   const shareLink = () => {
-    const link = `${window.location.origin}/meeting/${roomId}?role=student`;
+    const link = `${window.location.origin}/Student/meeting/${roomId}?role=student`;
     navigator.clipboard.writeText(link);
     alert("Meeting link copied!");
   };
@@ -211,14 +234,17 @@ function MeetingRoom() {
         <>
           <button onClick={shareLink}>Copy Meeting Link</button>
 
+          <h3>Join Requests</h3>
           {pendingUsers.map(id => (
-            <button
-              key={id}
-              onClick={() => connection.invoke("AcceptUser", roomId, id)}
-            >
-              Accept {id}
-            </button>
+            <div key={id}>
+              <span>{id}</span>
+              <button onClick={() => connection.invoke("AcceptUser", roomId, id)}>Accept</button>
+              <button onClick={() => connection.invoke("RejectUser", roomId, id)}>Reject</button>
+            </div>
           ))}
+
+          <h3>Participants</h3>
+          {participants.map(id => <p key={id}>{id}</p>)}
 
           <div>
             <button onClick={toggleMic}>{micOn ? "Mute" : "Unmute"}</button>
@@ -236,13 +262,15 @@ function MeetingRoom() {
       )}
 
       <video ref={localVideo} autoPlay muted width="300" />
-      <video ref={remoteVideo} autoPlay muted width="300" />
+      <video ref={remoteVideo} autoPlay playsInline width="300" />
 
       <hr />
 
       {messages.map((m, i) => <p key={i}>{m}</p>)}
       <input value={message} onChange={e => setMessage(e.target.value)} />
-      <button onClick={() => connection.invoke("SendMessage", roomId, userId, message)}>
+      <button onClick={() =>
+        connection.invoke("SendMessage", roomId, userId, message)
+      }>
         Send
       </button>
     </div>

@@ -6,7 +6,7 @@ export default function CreateMeeting() {
 
   const createMeeting = () => {
     const id = uuid();
-    navigate(`/meeting/${id}?role=teacher`);
+    navigate(`/Faculty/meeting/${id}?role=teacher`);
   };
 
   return (
